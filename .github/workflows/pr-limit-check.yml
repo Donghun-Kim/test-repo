@@ -2,57 +2,86 @@ name: PR Limit Check
 
 on:
   pull_request:
-    types: [opened, reopened]
+    # PR이 열리거나 다시 열릴 때 실행
+    types: [opened, reopened] 
 
 jobs:
   check-pr-limit:
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      issues: write
+    permissions: 
+      # PR 코멘트 추가 및 PR 닫기 권한
+      pull-requests: write 
+      # 이슈 코멘트 추가 권한
+      issues: write 
+    env:
+      # 최대 허용 PR 개수 설정
+      MAX_PRS: 3
     steps:
-      - name: Count open PRs and close if exceeded
+      - name: Check PR limit
         uses: actions/github-script@v7
         with:
           script: |
+            // 저장소 정보 추출
             const { owner, repo } = context.repo;
-            const maxPRs = 1;
-            const currentPRNumber = context.payload.pull_request.number;
-            
-            // 현재 열려있는 PR 개수 조회
-            const { data: openPRs } = await github.rest.pulls.list({
-              owner,
-              repo,
-              state: 'open',
-              per_page: 100
-            });
-            
-            const openPRCount = openPRs.length;
-            console.log(`현재 열려있는 PR 개수: ${openPRCount}`);
-            
-            if (openPRCount > maxPRs) {
+            // 최대 허용 PR 개수 설정
+            const maxPRs = parseInt(process.env.MAX_PRS)
+            // 현재 PR 번호 추출
+            const currentPRNumber = context.payload.pull_request?.number;
+
+            // PR 번호가 없으면 에러 처리
+            if (!currentPRNumber) {
+              core.setFailed('PR number not found in context');
+              return;
+            }
+
+            try {
+              // 현재 열려있는 PR 개수 조회
+              const openPRCount = await getOpenPRCount(owner, repo);
+              console.log(`현재 열려있는 PR 개수: ${openPRCount}`);
+              
+              // PR 개수 제한 초과 시 처리
+              if (openPRCount > maxPRs) {
+                await handlePRLimitExceeded(owner, repo, currentPRNumber, openPRCount, maxPRs);
+                core.setFailed(`PR이 자동으로 닫혔습니다: ${openPRCount}개 > ${maxPRs}개`);
+              } else {
+                console.log(`✅ PR 개수 확인 완료: ${openPRCount}개 (최대 ${maxPRs}개)`);
+              }
+            } catch (error) {
+              core.setFailed(`PR limit check failed: ${error.message}`);
+            }
+
+            // 열려있는 PR 개수를 조회하는 함수
+            async function getOpenPRCount(owner, repo) {
+              const { data: openPRs } = await github.rest.pulls.list({
+                owner,
+                repo,
+                state: 'open',      // 열려있는 PR만 조회
+                per_page: 100       // 최대 100개까지 조회 (페이지네이션 미구현)
+              });
+              return openPRs.length;
+            }
+
+            // PR 제한 초과 시 처리하는 함수
+            async function handlePRLimitExceeded(owner, repo, prNumber, currentCount, maxCount) {
+              // 안내 메시지 생성
               const message = `❌ PR 개수 제한 초과로 자동 닫힘\n\n` +
-                `현재 열려있는 PR: ${openPRCount}개\n` +
-                `최대 허용 PR: ${maxPRs}개\n\n` +
+                `현재 열려있는 PR: ${currentCount}개\n` +
+                `최대 허용 PR: ${maxCount}개\n\n` +
                 `기존 PR을 먼저 머지하거나 닫은 후 다시 PR을 생성해주세요.`;
               
-              // PR에 코멘트 추가
+              // PR에 코멘트 추가 (제한 초과 안내)
               await github.rest.issues.createComment({
                 owner,
                 repo,
-                issue_number: currentPRNumber,
+                issue_number: prNumber,
                 body: message
               });
               
-              // PR 닫기
+              // PR 자동 닫기
               await github.rest.pulls.update({
                 owner,
                 repo,
-                pull_number: currentPRNumber,
+                pull_number: prNumber,
                 state: 'closed'
               });
-              
-              core.setFailed(`PR이 자동으로 닫혔습니다: ${openPRCount}개 > ${maxPRs}개`);
-            } else {
-              console.log(`✅ PR 개수 확인 완료: ${openPRCount}개 (최대 ${maxPRs}개)`);
             }

@@ -15,12 +15,6 @@ jobs:
       issues: write 
     env:
       # 최대 허용 PR 개수 설정 (GitHub Repository Variables에서 가져옴, 기본값: 3)
-      # 설정 방법:
-      # 1. GitHub 저장소 페이지로 이동
-      # 2. Settings > Secrets and variables > Actions > Variables 탭 선택
-      # 3. "New repository variable" 클릭
-      # 4. Name: MAX_PRS, Value: 원하는 숫자 (예: 3) 입력 후 저장
-      # 변수가 설정되지 않은 경우 기본값 3이 사용됩니다.
       MAX_PRS: ${{ vars.MAX_PRS || '3' }}
     steps:
       - name: Check PR limit
@@ -69,11 +63,49 @@ jobs:
 
             // PR 제한 초과 시 처리하는 함수
             async function handlePRLimitExceeded(owner, repo, prNumber, currentCount, maxCount) {
+              // 열려있는 PR 목록 조회
+              const { data: openPRs } = await github.rest.pulls.list({
+                owner,
+                repo,
+                state: 'open',
+                per_page: 100
+              });
+              
+              // 현재 PR 제외하고 PR 목록 문자열 생성
+              const prList = openPRs
+                .filter(pr => pr.number !== prNumber)
+                .map(pr => `- #${pr.number} [${pr.title}](${pr.html_url})`)
+                .join('\n');
+              
+              // PR 목록이 비어있는 경우 처리
+              const prListSection = prList 
+                ? `### 📋 열려있는 PR 목록\n\n${prList}\n\n`
+                : `### 📋 열려있는 PR 목록\n\n(현재 PR 제외)\n\n`;
+              
+              // Settings URL 생성
+              const settingsUrl = `https://github.com/${owner}/${repo}/settings/secrets/actions`;
+              const variablesUrl = `https://github.com/${owner}/${repo}/settings/secrets/actions`;
+              
               // 안내 메시지 생성
-              const message = `❌ PR 개수 제한 초과로 자동 닫힘\n\n` +
-                `현재 열려있는 PR: ${currentCount}개\n` +
-                `최대 허용 PR: ${maxCount}개\n\n` +
-                `기존 PR을 먼저 머지하거나 닫은 후 다시 PR을 생성해주세요.`;
+              const message = `## ❌ PR 개수 제한 초과로 자동 닫힘\n\n` +
+                `### 📊 현재 상태\n\n` +
+                `| 항목 | 개수 |\n` +
+                `|------|------|\n` +
+                `| 현재 열려있는 PR | **${currentCount}개** |\n` +
+                `| 최대 허용 PR | **${maxCount}개** |\n\n` +
+                prListSection +
+                `### 🔧 해결 방법\n\n` +
+                `기존 PR을 먼저 머지하거나 닫은 후 다시 PR을 생성해주세요.\n\n` +
+                `---\n\n` +
+                `### 💡 PR 제한 변경이 필요한 경우\n\n` +
+                `hotfix 등 특수한 경우에 PR 제한을 변경하고 싶다면:\n\n` +
+                `1. 저장소 [**Settings**](${settingsUrl})로 이동\n` +
+                `2. **Secrets and variables** > **Actions** > [**Variables**](${variablesUrl}) 탭 선택\n` +
+                `3. \`MAX_PRS\` 변수를 설정하여 최대 허용 PR 개수 변경\n\n` +
+                `\`\`\`\n` +
+                `변수명: MAX_PRS\n` +
+                `값: 원하는 숫자 (예: 5)\n` +
+                `\`\`\``;
               
               // PR에 코멘트 추가 (제한 초과 안내)
               await github.rest.issues.createComment({

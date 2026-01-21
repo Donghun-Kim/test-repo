@@ -1,0 +1,61 @@
+name: PR Limit Check
+
+on:
+  pull_request:
+    # PR이 열리거나 다시 열릴 때 실행
+    types: [opened, reopened]
+
+jobs:
+  check-pr-count:
+    runs-on: ubuntu-latest
+    permissions: 
+      # PR 조회 권한
+      pull-requests: read 
+    outputs:
+      count: ${{ steps.count.outputs.count }}
+      warning_threshold: ${{ steps.count.outputs.warning_threshold }}
+      close_threshold: ${{ steps.count.outputs.close_threshold }}
+    env:
+      PR_WARNING_THRESHOLD: ${{ vars.PR_WARNING_THRESHOLD || '5' }}
+      PR_CLOSE_THRESHOLD: ${{ vars.PR_CLOSE_THRESHOLD || '10' }}
+    steps:
+      - name: Check PR count
+        id: count
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const PR_WARNING_THRESHOLD = parseInt(process.env.PR_WARNING_THRESHOLD);
+            const PR_CLOSE_THRESHOLD = parseInt(process.env.PR_CLOSE_THRESHOLD);
+            
+            try {
+              // 현재 열려있는 PR 개수 조회
+              const { data: openPRs } = await github.rest.pulls.list({
+                owner: owner,
+                repo: repo,
+                state: 'open',
+                per_page: 100
+              });
+              
+              const openPRCount = openPRs.length;
+              console.log(`현재 열려있는 PR 개수: ${openPRCount}`);
+              console.log(`경고 임계값: ${PR_WARNING_THRESHOLD}`);
+              console.log(`종료 임계값: ${PR_CLOSE_THRESHOLD}`);
+              
+              // outputs 설정
+              core.setOutput('count', openPRCount.toString());
+              core.setOutput('warning_threshold', PR_WARNING_THRESHOLD.toString());
+              core.setOutput('close_threshold', PR_CLOSE_THRESHOLD.toString());
+              
+              // 임계값 체크
+              if (openPRCount >= PR_CLOSE_THRESHOLD) {
+                core.setFailed(`PR 개수가 종료 임계값(${PR_CLOSE_THRESHOLD})을 초과했습니다. 현재: ${openPRCount}`);
+              } else if (openPRCount >= PR_WARNING_THRESHOLD) {
+                core.warning(`PR 개수가 경고 임계값(${PR_WARNING_THRESHOLD})을 초과했습니다. 현재: ${openPRCount}`);
+              } else {
+                console.log(`PR 개수가 정상 범위입니다.`);
+              }
+              
+            } catch (error) {
+              core.setFailed(`PR limit check failed: ${error.message}`);
+            }

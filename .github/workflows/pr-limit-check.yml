@@ -15,6 +15,7 @@ jobs:
       count: ${{ steps.count.outputs.count }}
       warning_threshold: ${{ steps.count.outputs.warning_threshold }}
       close_threshold: ${{ steps.count.outputs.close_threshold }}
+      should_warn: ${{ steps.count.outputs.should_warn }}
     env:
       PR_WARNING_THRESHOLD: ${{ vars.PR_WARNING_THRESHOLD || '5' }}
       PR_CLOSE_THRESHOLD: ${{ vars.PR_CLOSE_THRESHOLD || '10' }}
@@ -46,10 +47,12 @@ jobs:
               core.setOutput('count', openPRCount.toString());
               core.setOutput('warning_threshold', PR_WARNING_THRESHOLD.toString());
               core.setOutput('close_threshold', PR_CLOSE_THRESHOLD.toString());
+              core.setOutput('should_close', (openPRCount >= PR_CLOSE_THRESHOLD).toString());
+              core.setOutput('should_warn', (openPRCount >= PR_WARNING_THRESHOLD && openPRCount < PR_CLOSE_THRESHOLD).toString());
               
-              // 임계값 체크
+              // 임계값 체크 및 로깅
               if (openPRCount >= PR_CLOSE_THRESHOLD) {
-                core.setFailed(`PR 개수가 종료 임계값(${PR_CLOSE_THRESHOLD})을 초과했습니다. 현재: ${openPRCount}`);
+                console.log(`PR 개수가 종료 임계값(${PR_CLOSE_THRESHOLD})을 초과했습니다. 현재: ${openPRCount}`);
               } else if (openPRCount >= PR_WARNING_THRESHOLD) {
                 core.warning(`PR 개수가 경고 임계값(${PR_WARNING_THRESHOLD})을 초과했습니다. 현재: ${openPRCount}`);
               } else {
@@ -59,3 +62,138 @@ jobs:
             } catch (error) {
               core.setFailed(`PR limit check failed: ${error.message}`);
             }
+
+  check-pr-close:
+    runs-on: ubuntu-latest
+    needs: check-pr-count
+    if: needs.check-pr-count.outputs.should_close == 'true'
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Close PR with comment
+        uses: actions/github-script@v7
+        env:
+          PR_COUNT: ${{ needs.check-pr-count.outputs.count }}
+          PR_CLOSE_THRESHOLD: ${{ needs.check-pr-count.outputs.close_threshold }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const PR_CLOSE_THRESHOLD = parseInt(process.env.PR_CLOSE_THRESHOLD);
+            const currentCount = parseInt(process.env.PR_COUNT || '0');
+            
+            // Settings URL 생성
+            const settingsUrl = `https://github.com/${owner}/${repo}/settings`;
+            const variablesUrl = `https://github.com/${owner}/${repo}/settings/variables/actions`;
+            
+            // 안내 메시지 생성
+            const message = `## ❌ PR 개수 제한 초과로 자동 닫힘\n\n` +
+              `### 📊 현재 상태\n\n` +
+              `| 항목 | 개수 |\n` +
+              `|------|------|\n` +
+              `| 현재 열려있는 PR | **${currentCount}개** |\n` +
+              `| 최대 허용 PR | **${PR_CLOSE_THRESHOLD}개** |\n\n` +
+              `### 🔧 해결 방법\n\n` +
+              `기존 PR을 먼저 머지하거나 닫은 후 다시 PR을 생성해주세요.\n\n` +
+              `---\n\n` +
+              `### 💡 PR 제한 변경이 필요한 경우\n\n` +
+              `hotfix 등 특수한 경우에 PR 제한을 변경하고 싶다면:\n\n` +
+              `1. 저장소 [**Settings**](${settingsUrl})로 이동\n` +
+              `2. **Secrets and variables** > **Actions** > [**Variables**](${variablesUrl}) 탭 선택\n` +
+              `3. \`PR_CLOSE_THRESHOLD\` 변수를 설정하여 최대 허용 PR 개수 변경\n\n` +
+              `\`\`\`\n` +
+              `변수명: PR_CLOSE_THRESHOLD\n` +
+              `값: 원하는 숫자 (예: 5)\n` +
+              `\`\`\``;
+            
+            const { data: openPRs } = await github.rest.pulls.list({
+              owner: owner,
+              repo: repo,
+              state: 'open',
+              per_page: 1,
+              sort: 'created',
+              direction: 'desc'
+            });
+            
+            const latestPR = openPRs[0];
+            
+            // 코멘트 추가
+            await github.rest.issues.createComment({
+              owner: owner,
+              repo: repo,
+              issue_number: latestPR.number,
+              body: message
+            });
+            
+            // PR 닫기
+            await github.rest.pulls.update({
+              owner: owner,
+              repo: repo,
+              pull_number: latestPR.number,
+              state: 'closed'
+            });
+            
+            console.log(`PR #${latestPR.number}에 코멘트를 추가하고 닫았습니다.`);
+
+  check-working-count:
+    runs-on: ubuntu-latest
+    needs: check-pr-count
+    if: needs.check-pr-count.outputs.should_warn == 'true'
+    permissions:
+      issues: write
+    steps:
+      - name: Add warning comment
+        uses: actions/github-script@v7
+        env:
+          PR_COUNT: ${{ needs.check-pr-count.outputs.count }}
+          PR_WARNING_THRESHOLD: ${{ needs.check-pr-count.outputs.warning_threshold }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const PR_WARNING_THRESHOLD = parseInt(process.env.PR_WARNING_THRESHOLD);
+            const currentCount = parseInt(process.env.PR_COUNT || '0');
+            
+            // Settings URL 생성
+            const settingsUrl = `https://github.com/${owner}/${repo}/settings`;
+            const variablesUrl = `https://github.com/${owner}/${repo}/settings/variables/actions`;
+            
+            // 안내 메시지 생성
+            const message = `## ⚠️ PR 개수 경고\n\n` +
+              `### 📊 현재 상태\n\n` +
+              `| 항목 | 개수 |\n` +
+              `|------|------|\n` +
+              `| 현재 열려있는 PR | **${currentCount}개** |\n` +
+              `| 경고 임계값 | **${PR_WARNING_THRESHOLD}개** |\n\n` +
+              `### 🔧 권장 사항\n\n` +
+              `PR 개수가 경고 임계값을 초과했습니다. 기존 PR을 먼저 머지하거나 닫는 것을 권장합니다.\n\n` +
+              `---\n\n` +
+              `### 💡 PR 제한 변경이 필요한 경우\n\n` +
+              `hotfix 등 특수한 경우에 PR 제한을 변경하고 싶다면:\n\n` +
+              `1. 저장소 [**Settings**](${settingsUrl})로 이동\n` +
+              `2. **Secrets and variables** > **Actions** > [**Variables**](${variablesUrl}) 탭 선택\n` +
+              `3. \`PR_WARNING_THRESHOLD\` 변수를 설정하여 경고 임계값 변경\n\n` +
+              `\`\`\`\n` +
+              `변수명: PR_WARNING_THRESHOLD\n` +
+              `값: 원하는 숫자 (예: 5)\n` +
+              `\`\`\``;
+            
+            const { data: openPRs } = await github.rest.pulls.list({
+              owner: owner,
+              repo: repo,
+              state: 'open',
+              per_page: 1,
+              sort: 'created',
+              direction: 'desc'
+            });
+            
+            const latestPR = openPRs[0];
+            
+            // 코멘트 추가
+            await github.rest.issues.createComment({
+              owner: owner,
+              repo: repo,
+              issue_number: latestPR.number,
+              body: message
+            });
+            
+            console.log(`PR #${latestPR.number}에 경고 코멘트를 추가했습니다.`);

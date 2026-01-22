@@ -15,6 +15,7 @@ jobs:
       count: ${{ steps.count.outputs.count }}
       warning_threshold: ${{ steps.count.outputs.warning_threshold }}
       close_threshold: ${{ steps.count.outputs.close_threshold }}
+      should_close: ${{ steps.count.outputs.should_close }}
       should_warn: ${{ steps.count.outputs.should_warn }}
     env:
       PR_WARNING_THRESHOLD: ${{ vars.PR_WARNING_THRESHOLD || '5' }}

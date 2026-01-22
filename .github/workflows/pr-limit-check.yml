@@ -47,13 +47,15 @@ jobs:
               core.setOutput('count', openPRCount.toString());
               core.setOutput('warning_threshold', PR_WARNING_THRESHOLD.toString());
               core.setOutput('close_threshold', PR_CLOSE_THRESHOLD.toString());
-              core.setOutput('should_close', (openPRCount >= PR_CLOSE_THRESHOLD).toString());
-              core.setOutput('should_warn', (openPRCount >= PR_WARNING_THRESHOLD && openPRCount < PR_CLOSE_THRESHOLD).toString());
+              core.setOutput('should_close', 'false');
+              core.setOutput('should_warn', 'false');
               
-              // 임계값 체크 및 로깅
+              // 임계값 체크 및 output 설정
               if (openPRCount >= PR_CLOSE_THRESHOLD) {
+                core.setOutput('should_close', 'true');
                 console.log(`PR 개수가 종료 임계값(${PR_CLOSE_THRESHOLD})을 초과했습니다. 현재: ${openPRCount}`);
               } else if (openPRCount >= PR_WARNING_THRESHOLD) {
+                core.setOutput('should_warn', 'true');
                 core.warning(`PR 개수가 경고 임계값(${PR_WARNING_THRESHOLD})을 초과했습니다. 현재: ${openPRCount}`);
               } else {
                 console.log(`PR 개수가 정상 범위입니다.`);

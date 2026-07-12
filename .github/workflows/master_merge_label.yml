@@ -1,0 +1,104 @@
+name: Master Merge Label Hook
+
+on:
+  # CI(lint/type check + test)가 모두 성공한 뒤에만 라벨을 부여한다.
+  # 00.ci.yml은 push 트리거로 동작하므로 workflow_run으로 연동한다.
+  workflow_run:
+    workflows: ["00. CI"]
+    types: [completed]
+  # 새 커밋이 push되면 CI 재통과 전까지 라벨을 제거한다.
+  pull_request:
+    types: [synchronize]
+
+jobs:
+  add-label-on-ci-success:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v8
+        name: Add label if PR contains master merge commit and CI passed
+        with:
+          script: |
+            const LABEL_NAME = "master merged";
+            const { owner, repo } = context.repo;
+            const headBranch = context.payload.workflow_run.head_branch;
+            const headSha = context.payload.workflow_run.head_sha;
+
+            // CI가 성공한 브랜치의 열린 PR 조회
+            const { data: prs } = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: "open",
+              head: `${owner}:${headBranch}`,
+            });
+
+            if (prs.length === 0) {
+              console.log(`브랜치 ${headBranch}에 열린 PR 없음`);
+              return;
+            }
+
+            const masterMergePattern = /Merge (remote-tracking )?branch '(origin\/)?master'/;
+
+            for (const pr of prs) {
+              // CI가 통과한 커밋이 PR의 최신 커밋인 경우에만 라벨 부여
+              // (CI 실행 중 새 커밋이 push된 경우 스킵)
+              if (pr.head.sha !== headSha) {
+                console.log(`PR #${pr.number}: head(${pr.head.sha.slice(0, 9)})가 CI 커밋(${headSha.slice(0, 9)})과 달라 스킵`);
+                continue;
+              }
+
+              const commits = await github.paginate(github.rest.pulls.listCommits, {
+                owner,
+                repo,
+                pull_number: pr.number,
+                per_page: 100,
+              });
+
+              const mergeCommits = commits.filter(
+                (c) => c.parents.length > 1 && masterMergePattern.test(c.commit.message)
+              );
+
+              if (mergeCommits.length === 0) {
+                console.log(`PR #${pr.number}: master 머지 커밋 없음`);
+                continue;
+              }
+
+              console.log(`PR #${pr.number}: master 머지 커밋 발견 (${mergeCommits.map((c) => c.sha.slice(0, 9)).join(", ")}), CI 통과 확인됨`);
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: pr.number,
+                labels: [LABEL_NAME],
+              });
+              console.log(`PR #${pr.number}: 라벨 "${LABEL_NAME}" 추가 완료`);
+            }
+
+  remove-stale-label:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v8
+        name: Remove label until CI passes again
+        with:
+          script: |
+            const LABEL_NAME = "master merged";
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+
+            const hasLabel = pr.labels.some((label) => label.name === LABEL_NAME);
+            if (!hasLabel) {
+              console.log("라벨 없음, 스킵");
+              return;
+            }
+
+            await github.rest.issues.removeLabel({
+              owner,
+              repo,
+              issue_number: pr.number,
+              name: LABEL_NAME,
+            });
+            console.log(`새 커밋 push로 라벨 "${LABEL_NAME}" 제거 (CI 재통과 시 재부여)`);

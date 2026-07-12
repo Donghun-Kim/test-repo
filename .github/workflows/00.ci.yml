@@ -1,0 +1,15 @@
+name: "00. CI"
+
+on:
+  push:
+    branches-ignore: [code-review, "int*", "dev*"]
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "CI started"
+      - run: sleep 60
+      - run: echo "CI finished"

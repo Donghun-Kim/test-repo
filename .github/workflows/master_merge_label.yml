@@ -1,18 +1,15 @@
 name: Master Merge Label Hook
 
 on:
-  # CI(lint/type check + test)가 모두 성공한 뒤에만 라벨을 부여한다.
+  # CI(uv-test + lint/type-check)가 모두 성공한 뒤에만 라벨을 부여한다.
   # 00.ci.yml은 push 트리거로 동작하므로 workflow_run으로 연동한다.
   workflow_run:
     workflows: ["00. CI"]
     types: [completed]
-  # 새 커밋이 push되면 CI 재통과 전까지 라벨을 제거한다.
-  pull_request:
-    types: [synchronize]
 
 jobs:
   add-label-on-ci-success:
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -42,6 +39,13 @@ jobs:
             const masterMergePattern = /Merge (remote-tracking )?branch '(origin\/)?master'/;
 
             for (const pr of prs) {
+              // 이미 라벨이 있으면 skip (라벨은 최초 1회만 부여, 이후 유지)
+              const alreadyLabeled = pr.labels.some((label) => label.name === LABEL_NAME);
+              if (alreadyLabeled) {
+                console.log(`PR #${pr.number}: 이미 라벨 있음 → skip`);
+                continue;
+              }
+
               // CI가 통과한 커밋이 PR의 최신 커밋인 경우에만 라벨 부여
               // (CI 실행 중 새 커밋이 push된 경우 스킵)
               if (pr.head.sha !== headSha) {
@@ -74,31 +78,3 @@ jobs:
               });
               console.log(`PR #${pr.number}: 라벨 "${LABEL_NAME}" 추가 완료`);
             }
-
-  remove-stale-label:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    steps:
-      - uses: actions/github-script@v8
-        name: Remove label until CI passes again
-        with:
-          script: |
-            const LABEL_NAME = "master merged";
-            const { owner, repo } = context.repo;
-            const pr = context.payload.pull_request;
-
-            const hasLabel = pr.labels.some((label) => label.name === LABEL_NAME);
-            if (!hasLabel) {
-              console.log("라벨 없음, 스킵");
-              return;
-            }
-
-            await github.rest.issues.removeLabel({
-              owner,
-              repo,
-              issue_number: pr.number,
-              name: LABEL_NAME,
-            });
-            console.log(`새 커밋 push로 라벨 "${LABEL_NAME}" 제거 (CI 재통과 시 재부여)`);

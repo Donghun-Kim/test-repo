@@ -2,14 +2,43 @@ name: "00. CI"
 
 on:
   push:
-    branches-ignore: [code-review, "int*", "dev*"]
+    branches-ignore:
+      - code-review
+      - "int*"
+      - "dev*"
   workflow_dispatch:
 
 jobs:
-  ci:
+  uv-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: echo "CI started"
-      - run: sleep 60
-      - run: echo "CI finished"
+      - name: Toggle failure marker
+        run: |
+          if [ -f ci-should-fail ] || [ -f uv-should-fail ]; then
+            echo "failure marker present for uv-test"
+            exit 1
+          fi
+          echo "uv-test passed"
+      - name: Sleep
+        run: sleep 45
+
+  lint-type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toggle failure marker
+        run: |
+          if [ -f ci-should-fail ] || [ -f lint-should-fail ]; then
+            echo "failure marker present for lint-type-check"
+            exit 1
+          fi
+          echo "lint-type-check passed"
+
+  static-analysis:
+    runs-on: ubuntu-latest
+    needs: [uv-test, lint-type-check]
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/proposed-release' || github.ref == 'refs/heads/stage'
+    steps:
+      - name: Static analysis
+        run: echo "static-analysis passed"

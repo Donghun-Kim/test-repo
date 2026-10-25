@@ -1,0 +1,133 @@
+# yogiyo/cartyo 의 04.deploy-to-stg.yml 모사본. job 이름·needs 그래프·outputs·concurrency 는 원본 그대로.
+# 치환: self-hosted-runner-v2 / cartyo-runner-medium-v2 → ubuntu-latest, yogiyo/actions-* → 더미 step,
+#       secrets·OIDC·docker 빌드 제거(sleep 으로 소요만 재현), version-updater 의 차트 커밋 → stage 태그 push.
+# 원본의 `environment: 'stage'` 는 뺐다 — private 저장소 + GitHub Free 는 environment 를 만들 수 없다.
+# 승인 대기(`waiting`) 판정은 deploy_actions 의 contract 테스트에서 고정 JSON 으로 검증한다.
+name: 04. (Manual) Deploy to Stage
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: lock-stage-tag
+
+env:
+  micro-service-name: "testyo"
+  sub-service-name: "api"
+
+jobs:
+  generate-tag: # Get Image Tag
+    runs-on: ubuntu-latest
+    outputs:
+      new-prod-tag: ${{ steps.generate_tag.outputs.new-prod-tag }}
+      new-stg-tag: ${{ steps.generate_tag.outputs.new-stg-tag }}
+      latest-prod-tag: ${{ steps.generate_tag.outputs.latest-prod-tag }}
+      latest-stg-tag: ${{ steps.generate_tag.outputs.latest-stg-tag }}
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Generate Stage Tag
+        id: generate_tag
+        uses: ./.github/actions/tag-generator
+        with:
+          env: 'stg'
+
+  stg-deployment-validator:
+    runs-on: ubuntu-latest
+    needs: generate-tag
+    outputs:
+      prod-deploy-version: ${{ steps.deployment_ticket.outputs.prod-deploy-version }}
+      deployment-ticket-keys: ${{ steps.deployment_ticket.outputs.deployment-ticket-keys }}
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Stg Deployment Validation
+        id: deployment_ticket
+        run: |
+          # 00.ci.yml 의 마커 방식 그대로 — 실패 경로를 재현할 때 이 파일을 커밋한다.
+          if [ -f stg-should-fail ]; then
+            echo "failure marker present for stg-deployment-validator"
+            exit 1
+          fi
+          echo "deploy-stg-version:  ${{ needs.generate-tag.outputs.new-stg-tag }}"
+          echo "deploy-prod-version: ${{ needs.generate-tag.outputs.new-prod-tag }}"
+          {
+            echo "prod-deploy-version=${{ needs.generate-tag.outputs.new-prod-tag }}"
+            echo "deployment-ticket-keys=DEPL-0000"
+          } >> "$GITHUB_OUTPUT"
+
+  docker-build-and-push:
+    needs: [ generate-tag, stg-deployment-validator ]
+    runs-on: ubuntu-latest
+    outputs:
+      image-path: ${{ steps.docker-build-push.outputs.image-path }}
+      image-tags: ${{ steps.docker-build-push.outputs.image-tags }}
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Docker Build & Push
+        id: docker-build-push
+        run: |
+          # 실제 빌드 대신 소요만 재현한다 — 봇이 in_progress 를 관측할 창.
+          sleep 45
+          {
+            echo "image-path=ghcr.io/donghun-kim/testyo"
+            echo "image-tags=${{ needs.generate-tag.outputs.new-stg-tag }}"
+          } >> "$GITHUB_OUTPUT"
+
+  version-updater: # Deployed by argoCD
+    needs: [ generate-tag, stg-deployment-validator, docker-build-and-push ]
+    runs-on: ubuntu-latest
+    # 원본: environment: 'stage'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Replace image tag in manifest file
+        id: version_updater
+        run: |
+          # 원본은 yogiyo/yoboard-charts 의 values/stage/testyo.yaml 을 고친다.
+          # 모사본은 차트 리포가 없으니 그 job 이 함께 찍는 stage 태그만 만든다 — deploy_stage_tag 가 보는 그 태그다.
+          TAG='${{ needs.generate-tag.outputs.new-stg-tag }}'
+          echo "JIRA_ISSUE_KEY=${{ needs.stg-deployment-validator.outputs.deployment-ticket-keys }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+          echo "stage 태그 생성: $TAG → $GITHUB_SHA"
+
+  update-deployment-ticket:
+    runs-on: ubuntu-latest
+    needs: [ generate-tag, version-updater ]
+    outputs:
+      prod-deploy-version: ${{ steps.deployment_ticket.outputs.prod-deploy-version }}
+      deployment-ticket-keys: ${{ steps.deployment_ticket.outputs.deployment-ticket-keys }}
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Apply Stg Deployment
+        id: deployment_ticket
+        run: |
+          echo "stg deploy 반영: ${{ needs.generate-tag.outputs.new-stg-tag }}"
+          {
+            echo "prod-deploy-version=${{ needs.generate-tag.outputs.new-prod-tag }}"
+            echo "deployment-ticket-keys=DEPL-0000"
+          } >> "$GITHUB_OUTPUT"

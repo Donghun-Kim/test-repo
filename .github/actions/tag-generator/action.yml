@@ -1,0 +1,64 @@
+name: "Tag Generator (dummy)"
+description: >
+  cartyo 의 yogiyo/actions-tag-generator@v1 자리를 대신하는 더미. 태그를 계산만 하고 만들지는 않는다
+  (실제 생성은 version-updater job 몫 — cartyo 도 같다). 규칙은 cartyo 태그 실측 그대로:
+  prod = 최신 x.y.z 의 patch+1, stage = <next-prod>-stage.N.
+
+inputs:
+  env:
+    description: "prod | stg — prod 면 stage 태그 선행을 검증한다(원본 액션의 ERROR 재현)"
+    required: true
+
+outputs:
+  new-prod-tag:
+    description: "다음 prod 태그"
+    value: ${{ steps.calc.outputs.new-prod-tag }}
+  new-stg-tag:
+    description: "다음 stage 태그"
+    value: ${{ steps.calc.outputs.new-stg-tag }}
+  latest-prod-tag:
+    description: "현재 prod 태그 (없으면 빈 문자열)"
+    value: ${{ steps.calc.outputs.latest-prod-tag }}
+  latest-stg-tag:
+    description: "다음 prod 태그에 달린 최신 stage 태그 (없으면 빈 문자열)"
+    value: ${{ steps.calc.outputs.latest-stg-tag }}
+
+runs:
+  using: composite
+  steps:
+    - id: calc
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        latest_prod="$(git tag -l | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+        if [ -z "$latest_prod" ]; then
+          new_prod="1.0.0"
+        else
+          IFS=. read -r major minor patch <<< "$latest_prod" || true
+          new_prod="${major}.${minor}.$((patch + 1))"
+        fi
+
+        latest_stg="$(git tag -l "${new_prod}-stage.*" | sort -V | tail -1 || true)"
+        if [ -z "$latest_stg" ]; then
+          new_stg="${new_prod}-stage.1"
+        else
+          new_stg="${new_prod}-stage.$(( ${latest_stg##*-stage.} + 1 ))"
+        fi
+
+        # prod 경로는 stage 태그가 선행해야 통과한다 — deploy_stage_tag 가 판정하는 그 규칙.
+        # 태그가 하나도 없는 부트스트랩 상태에서는 막지 않는다(첫 바퀴가 돌 수 있게).
+        if [ "${{ inputs.env }}" = "prod" ] && [ -n "$latest_prod" ] && [ -z "$latest_stg" ]; then
+          echo "::error::Stage deployment must precede Prod deployment. (next prod=${new_prod}, stage 태그 없음)"
+          exit 1
+        fi
+
+        {
+          echo "new-prod-tag=${new_prod}"
+          echo "new-stg-tag=${new_stg}"
+          echo "latest-prod-tag=${latest_prod}"
+          echo "latest-stg-tag=${latest_stg}"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "latest prod=${latest_prod:-(없음)} → new prod=${new_prod}"
+        echo "latest stage=${latest_stg:-(없음)} → new stage=${new_stg}"

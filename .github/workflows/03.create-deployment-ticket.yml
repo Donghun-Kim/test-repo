@@ -8,6 +8,9 @@ on:
   push:
     branches:
       - proposed-release
+      # chronos 전용 검증 브랜치 — 테스트 레포의 proposed-release 는 master 와 역사가 무관한 고아라
+      # 체인이 fast-forward 로 올릴 수 없다. 그래서 master 계통의 전용 브랜치를 하나 더 받는다.
+      - chronos-proposed-release
 
 concurrency:
   group: lock-create-deployment-ticket
@@ -68,12 +71,12 @@ jobs:
         run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
   stage-deploy:
     needs: create-deployment-ticket
-    if: ${{ github.ref == 'refs/heads/proposed-release' }}
+    if: ${{ endsWith(github.ref, 'proposed-release') }}   # 원본은 refs/heads/proposed-release 고정 — 전용 검증 브랜치를 함께 받으려 접미사로 넓혔다
     uses: ./.github/workflows/04.deploy-to-stg.yml
     secrets: inherit
 
   prod-deploy:
-    if: ${{ github.ref == 'refs/heads/proposed-release' }}
+    if: ${{ endsWith(github.ref, 'proposed-release') }}   # 원본은 refs/heads/proposed-release 고정 — 전용 검증 브랜치를 함께 받으려 접미사로 넓혔다
     needs: stage-deploy
     uses: ./.github/workflows/05.deploy-to-prod.yml
     secrets: inherit

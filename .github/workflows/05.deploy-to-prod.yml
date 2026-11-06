@@ -1,8 +1,9 @@
 # yogiyo/cartyo 의 05.deploy-to-prod.yml 모사본. job 이름·needs 그래프·outputs·concurrency 는 원본 그대로.
 # 치환: runner → ubuntu-latest, yogiyo/actions-* → 더미 step, secrets·OIDC·docker 빌드 제거(sleep 으로 소요만),
 #       version-updater 의 차트 커밋 → prod 태그 push, Slack 알림 → echo.
-# 원본의 `environment: 'prod'`(= 사람이 누르는 승인 지점)는 뺐다 — private 저장소 + GitHub Free 는
-# environment 를 만들 수 없다. `waiting` 판정은 deploy_actions contract 테스트에서 고정 JSON 으로 검증한다.
+# 원본의 `environment: 'prod'`(= 사람이 누르는 승인 지점)를 **복원했다**(2026-11-05) — 저장소를 public 으로 돌려
+# Free 에서도 protection rule 을 걸 수 있게 됐다(private 으로 되돌리면 그 설정은 무시된다 — GitHub 문서).
+# 그래서 `version-updater` 는 승인 전까지 `waiting` 이다 — 봇의 `waiting` 판정을 고정 JSON 이 아니라 실측으로 보는 자리다.
 # 원본 generate-tag 에는 `increment: 'minor'` 가 있으나 cartyo 실측 태그는 patch 증가(1.198.206→210)이고
 # deploy_stage_tag/repos.json 도 cartyo 를 "patch" 로 둔다 — 액션 내부 해석이 다른 것으로 보이나 미확인이라
 # 모사본은 실측을 따라 patch 로 둔다.
@@ -42,6 +43,9 @@ jobs:
             echo "deployment-ticket-keys=DEPL-0000"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
+
   generate-tag: # Get Image Tag
     runs-on: ubuntu-latest
     outputs:
@@ -61,6 +65,9 @@ jobs:
         uses: ./.github/actions/tag-generator
         with:
           env: 'prod'   # 원본은 여기에 increment: 'minor' 가 더 붙는다(위 머리말 참조)
+
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
 
   prod-deployment-validator:
     runs-on: ubuntu-latest
@@ -89,6 +96,9 @@ jobs:
             echo "deployment-ticket-keys=DEPL-0000"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
+
   notify-migration-to-slack:
     runs-on: ubuntu-latest
     steps:
@@ -112,6 +122,9 @@ jobs:
         if: steps.check-migrations.outputs.migration_changes == 'true'
         run: echo "[slack] 마이그레이션 변경 있음 — 배포 전 확인 필요"
 
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
+
   docker-build-and-push:
     needs: [ get-prod-deploy-version, generate-tag, prod-deployment-validator ]
     runs-on: ubuntu-latest
@@ -125,16 +138,19 @@ jobs:
       - name: Docker Build & Push
         id: docker-build-push
         run: |
-          sleep 45
+          sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
           {
             echo "image-path=ghcr.io/donghun-kim/testyo"
             echo "image-tags=${{ needs.generate-tag.outputs.new-prod-tag }}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
+
   version-updater: # Deployed by argoCD
     needs: [ generate-tag, get-prod-deploy-version, docker-build-and-push ]
     runs-on: ubuntu-latest
-    # 원본: environment: 'prod' — 사람이 GitHub Environment 에서 승인할 때까지 이 job 이 waiting 으로 멈춘다.
+    environment: 'prod'   # 원본과 같은 자리 — 사람이 GitHub Environment 에서 승인할 때까지 이 job 이 waiting 으로 멈춘다
     permissions:
       contents: write
     steps:
@@ -155,9 +171,15 @@ jobs:
           git push origin "refs/tags/$TAG"
           echo "prod 태그 생성: $TAG → $GITHUB_SHA"
 
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
+
   update-deployment-ticket:
     runs-on: ubuntu-latest
     needs: [ generate-tag, get-prod-deploy-version, version-updater ]
+    outputs:
+      prod-deploy-version: ${{ steps.deployment_ticket.outputs.prod-deploy-version }}
+      deployment-ticket-keys: ${{ steps.deployment_ticket.outputs.deployment-ticket-keys }}
     steps:
       - name: Checkout Code Repository
         uses: actions/checkout@v4
@@ -169,6 +191,13 @@ jobs:
         id: deployment_ticket
         run: |
           echo "prod deploy 반영: ${{ needs.generate-tag.outputs.new-prod-tag }}"
+          {
+            echo "prod-deploy-version=${{ needs.get-prod-deploy-version.outputs.prod-deploy-version }}"
+            echo "deployment-ticket-keys=${{ needs.get-prod-deploy-version.outputs.deployment-ticket-keys }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
 
   workflow-notification:
     runs-on: ubuntu-latest
@@ -191,6 +220,9 @@ jobs:
         run: echo "[slack] ${{ env.job-status }} — ${{ env.slack-message }}"
 
   # Sending notifications for the docker job
+
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
   docker-notification:
     runs-on: ubuntu-latest
     if: ${{ always() }}
@@ -210,3 +242,6 @@ jobs:
 
       - name: Post Success Notification to a Slack channel
         run: echo "[slack] ${{ env.job-status }} — ${{ env.slack-message }}"
+
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)

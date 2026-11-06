@@ -1,3 +1,12 @@
+# yogiyo/orderyo · yogiyo/cartyo 의 00.ci.yml 모사본 (chronos ready_for_stage_branch 의 Actions 폴링 검증용).
+# 관측 표면(워크플로 name · 트리거 · concurrency · job 이름/needs 그래프/matrix 전개/if 가드)은 원본 그대로이고,
+# 사내 의존만 치환했다 — self-hosted-runner-v2 → ubuntu-latest, yogiyo/actions-* · docker · sonarqube → sleep 5.
+#
+# 봇이 보는 자리가 둘이다.
+#   ① check-branch-base 는 stage · proposed-release 에서 **skip** 된다(원본과 같은 if) — 진행 표의 `⏭️` 줄이 거기서 난다.
+#   ② matrix-build 는 list-django-apps 의 outputs 로 전개돼 `matrix-build (<그룹>)` 이름이 여럿 선다 — 줄이 늘어나는 자리다.
+#
+# 실패 경로를 보려면 브랜치에 빈 파일을 만들어 push 한다 — ci-should-fail(전부) · lint-should-fail · matrix-should-fail.
 name: "00. CI"
 
 on:
@@ -8,20 +17,60 @@ on:
       - "dev*"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  micro-service-name: "testyo"
+  sub-service-name: "api"
+  #: 각 단계의 처리 지연 — 봇이 "도는 중" 을 관측할 창이다. 5초 안팎으로 맞춘다(2026-11-06 사용자 지시).
+  step-duration: "5"
+
 jobs:
-  uv-test:
+  # 원본과 같은 가드 — stage · master · proposed-release 에서는 **돌지 않는다**(skip).
+  check-branch-base:
     runs-on: ubuntu-latest
+    if: github.ref != 'refs/heads/master' && github.ref != 'refs/heads/stage' && github.ref != 'refs/heads/proposed-release'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check branch base
+        run: |
+          echo "base check for ${{ github.ref }}"
+          sleep ${{ env.step-duration }}
+
+  list-django-apps:
+    runs-on: ubuntu-latest
+    outputs:
+      app_groups: ${{ steps.list.outputs.app_groups }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: List app groups
+        id: list
+        run: |
+          # 원본은 장고 앱을 훑어 그룹을 짓는다. 여기서는 모양만 흉내낸다(matrix 전개 수를 고정하려고 3개다).
+          echo 'app_groups=["group-a","group-b","group-c"]' >> "$GITHUB_OUTPUT"
+          sleep ${{ env.step-duration }}
+
+  matrix-build:
+    needs: list-django-apps
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        django-apps: ${{ fromJson(needs.list-django-apps.outputs.app_groups) }}
     steps:
       - uses: actions/checkout@v4
       - name: Toggle failure marker
         run: |
-          if [ -f ci-should-fail ] || [ -f uv-should-fail ]; then
-            echo "failure marker present for uv-test"
+          if [ -f ci-should-fail ] || [ -f matrix-should-fail ]; then
+            echo "failure marker present for matrix-build (${{ matrix.django-apps }})"
             exit 1
           fi
-          echo "uv-test passed"
-      - name: Sleep
-        run: sleep 45
+      - name: Build and test
+        run: |
+          echo "building ${{ matrix.django-apps }}"
+          sleep ${{ env.step-duration }}
 
   lint-type-check:
     runs-on: ubuntu-latest
@@ -33,12 +82,37 @@ jobs:
             echo "failure marker present for lint-type-check"
             exit 1
           fi
-          echo "lint-type-check passed"
+      - name: Lint and type check
+        run: sleep ${{ env.step-duration }}
 
-  static-analysis:
+  resilience4py-test:
     runs-on: ubuntu-latest
-    needs: [uv-test, lint-type-check]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resilience test
+        run: sleep ${{ env.step-duration }}
+
+  static-analysis: # Sonarqube Scan
+    needs:
+      - matrix-build
+      - lint-type-check
+    runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/proposed-release' || github.ref == 'refs/heads/stage'
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Static analysis
-        run: echo "static-analysis passed"
+        run: sleep ${{ env.step-duration }}
+
+  # Sending notifications for the entire workflow
+  workflow-notification:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/proposed-release' || github.ref == 'refs/heads/stage'
+    needs:
+      - static-analysis
+    steps:
+      - name: Notify
+        run: |
+          echo "static-analysis result: ${{ needs.static-analysis.result }}"
+          sleep ${{ env.step-duration }}

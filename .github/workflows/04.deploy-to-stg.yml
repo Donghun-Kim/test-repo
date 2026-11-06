@@ -1,8 +1,13 @@
-# yogiyo/cartyo 의 04.deploy-to-stg.yml 모사본. job 이름·needs 그래프·outputs·concurrency 는 원본 그대로.
+# yogiyo/cartyo 의 04.deploy-to-stg.yml 모사본. job 이름·outputs·concurrency 는 원본 그대로.
+# **needs 는 한 군데가 원본과 다르다**(2026-11-05 대조) — 원본 `version-updater` 는 `needs: [generate-tag, docker-build-and-push]` 인데
+# 그 job 안에서 `needs.stg-deployment-validator.outputs.deployment-ticket-keys` 를 참조한다. `needs` 컨텍스트는 선언된 job 만 담으므로
+# 원본에서 그 값은 빈 문자열이다(실행 순서는 `docker-build-and-push` 가 validator 를 기다려 보장된다). 모사본은 `needs` 에 validator 를
+# 더해 그 참조가 실제 값을 받게 했다 — job 이름·개수·진행 순서는 같아 봇의 관측 표면에는 차이가 없다.
 # 치환: self-hosted-runner-v2 / cartyo-runner-medium-v2 → ubuntu-latest, yogiyo/actions-* → 더미 step,
 #       secrets·OIDC·docker 빌드 제거(sleep 으로 소요만 재현), version-updater 의 차트 커밋 → stage 태그 push.
-# 원본의 `environment: 'stage'` 는 뺐다 — private 저장소 + GitHub Free 는 environment 를 만들 수 없다.
-# 승인 대기(`waiting`) 판정은 deploy_actions 의 contract 테스트에서 고정 JSON 으로 검증한다.
+# 원본의 `environment: 'stage'` 를 **복원했다**(2026-11-05) — 저장소를 public 으로 돌려 Free 에서도 protection rule 을 걸 수 있게 됐다.
+# (GitHub 문서: environment · protection rules · environment secrets 는 Free 에서 public 저장소에만 설정된다. private 으로 되돌리면 그 설정은 무시된다.)
+# 그래서 `version-updater` 는 사람이 승인할 때까지 `waiting` 으로 멈춘다 — 봇이 그 상태를 어떻게 읽는지 실측하는 자리다.
 name: 04. (Manual) Deploy to Stage
 
 on:
@@ -37,6 +42,9 @@ jobs:
         with:
           env: 'stg'
 
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
+
   stg-deployment-validator:
     runs-on: ubuntu-latest
     needs: generate-tag
@@ -64,6 +72,9 @@ jobs:
             echo "deployment-ticket-keys=DEPL-0000"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
+
   docker-build-and-push:
     needs: [ generate-tag, stg-deployment-validator ]
     runs-on: ubuntu-latest
@@ -78,16 +89,19 @@ jobs:
         id: docker-build-push
         run: |
           # 실제 빌드 대신 소요만 재현한다 — 봇이 in_progress 를 관측할 창.
-          sleep 45
+          sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
           {
             echo "image-path=ghcr.io/donghun-kim/testyo"
             echo "image-tags=${{ needs.generate-tag.outputs.new-stg-tag }}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
+
   version-updater: # Deployed by argoCD
     needs: [ generate-tag, stg-deployment-validator, docker-build-and-push ]
     runs-on: ubuntu-latest
-    # 원본: environment: 'stage'
+    environment: 'stage'   # 원본과 같은 자리 — 사람이 승인할 때까지 이 job 이 waiting 으로 멈춘다
     permissions:
       contents: write
     steps:
@@ -110,6 +124,9 @@ jobs:
           git push origin "refs/tags/$TAG"
           echo "stage 태그 생성: $TAG → $GITHUB_SHA"
 
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
+
   update-deployment-ticket:
     runs-on: ubuntu-latest
     needs: [ generate-tag, version-updater ]
@@ -131,3 +148,6 @@ jobs:
             echo "prod-deploy-version=${{ needs.generate-tag.outputs.new-prod-tag }}"
             echo "deployment-ticket-keys=DEPL-0000"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Simulate step duration
+        run: sleep 5   # 단계 지연 5초 — 봇이 "도는 중" 을 관측할 창(2026-11-06 에 3~10초 랜덤에서 고정으로 바꿨다)
